@@ -1,3 +1,4 @@
+import { createInterface } from "node:readline/promises";
 import chalk from "chalk";
 import { spawnSync } from "child_process";
 import extractZip from "extract-zip";
@@ -16,6 +17,34 @@ function isOfflineModeEnabled(): boolean {
 	const value = process.env.PI_OFFLINE;
 	if (!value) return false;
 	return value === "1" || value.toLowerCase() === "true" || value.toLowerCase() === "yes";
+}
+
+async function promptForToolInstall(config: ToolConfig, binaryPath: string): Promise<boolean> {
+	if (!process.stdin.isTTY || !process.stdout.isTTY) {
+		return false;
+	}
+
+	const stdin = process.stdin;
+	const canToggleRawMode = stdin.isTTY && typeof stdin.setRawMode === "function";
+	const wasRawMode = canToggleRawMode && stdin.isRaw === true;
+	if (wasRawMode) {
+		stdin.setRawMode(false);
+	}
+
+	stdin.resume();
+	process.stdout.write(
+		chalk.yellow(`\n${APP_NAME} wants to download ${config.name} from ${config.repo} to ${binaryPath}.\n`),
+	);
+	const rl = createInterface({ input: stdin, output: process.stdout });
+	try {
+		const answer = (await rl.question("Allow install? [y/N] ")).trim().toLowerCase();
+		return answer === "y" || answer === "yes";
+	} finally {
+		rl.close();
+		if (wasRawMode) {
+			stdin.setRawMode(true);
+		}
+	}
 }
 
 interface ToolConfig {
@@ -272,7 +301,23 @@ export async function ensureTool(tool: "fd" | "rg", silent: boolean = false): Pr
 		return undefined;
 	}
 
-	// Tool not found - download it
+	const binaryPath = join(TOOLS_DIR, config.binaryName + (platform() === "win32" ? ".exe" : ""));
+	const approved = await promptForToolInstall(config, binaryPath);
+	if (!approved) {
+		if (!silent) {
+			if (!process.stdin.isTTY || !process.stdout.isTTY) {
+				console.log(
+					chalk.yellow(
+						`${config.name} not found. Interactive approval is required to install ${binaryPath}, but no TTY is available.`,
+					),
+				);
+			} else {
+				console.log(chalk.yellow(`Skipped downloading ${config.name} to ${binaryPath}.`));
+			}
+		}
+		return undefined;
+	}
+
 	if (!silent) {
 		console.log(chalk.dim(`${config.name} not found. Downloading...`));
 	}
